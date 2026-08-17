@@ -6,7 +6,7 @@ import { getCompanyCurrency } from "@/lib/company"
 import ErrorBanner from "@/components/ui/error-banner"
 import { Separator } from "@/components/ui/separator"
 import Fuse from 'fuse.js'
-import { getSearchResults, LinkedPayment, UnreconciledTransaction, useGetRuleForTransaction, useGetUnreconciledTransactions, useGetVouchersForTransaction, useIsTransactionWithdrawal, useReconcileTransaction, useTransactionSearch } from "./utils"
+import { getSearchResults, LinkedPayment, UnreconciledTransaction, useAutoReconcileByReferenceNumber, useGetRuleForTransaction, useGetUnreconciledTransactions, useGetVouchersForTransaction, useIsTransactionWithdrawal, useReconcileTransaction, useTransactionSearch } from "./utils"
 import { Input } from "@/components/ui/input"
 import { AlertCircleIcon, ArrowDownRight, ArrowRightIcon, ArrowRightLeft, ArrowUpRight, BadgeCheck, ChevronDown, DollarSign, Landmark, LandmarkIcon, ListIcon, Loader2, Receipt, ReceiptIcon, Search, User, XCircle, ZapIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -54,7 +54,10 @@ const MatchAndReconcile = ({ contentHeight }: { contentHeight: number }) => {
     return <>
         <div className={`flex items-start space-x-2`} >
             <div className="flex-1">
-                <H4 className="text-sm font-medium">{_("Unreconciled Transactions")}</H4>
+                <div className="flex items-center justify-between">
+                    <H4 className="text-sm font-medium">{_("Unreconciled Transactions")}</H4>
+                    <AutoReconcileButton />
+                </div>
                 <UnreconciledTransactions contentHeight={contentHeight} />
             </div>
             <Separator orientation="vertical" style={{ minHeight: `${contentHeight}px` }} />
@@ -67,6 +70,30 @@ const MatchAndReconcile = ({ contentHeight }: { contentHeight: number }) => {
         <BankEntryModal />
         <RecordPaymentModal />
     </>
+}
+
+const AutoReconcileButton = () => {
+    const { autoReconcile, loading } = useAutoReconcileByReferenceNumber()
+
+    return <TooltipProvider>
+        <Tooltip>
+            <TooltipTrigger asChild>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    theme="gray"
+                    disabled={loading}
+                    onClick={autoReconcile}
+                >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ZapIcon className="w-4 h-4" />}
+                    {_("Auto Bank Reconciliation")}
+                </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+                {_("Automatically reconcile transactions whose Reference Number exactly matches a Payment Entry's Reference No")}
+            </TooltipContent>
+        </Tooltip>
+    </TooltipProvider>
 }
 
 /** TanStack requires `estimateSize` for initial scroll range; `measureElement` on each row sets the real height. */
