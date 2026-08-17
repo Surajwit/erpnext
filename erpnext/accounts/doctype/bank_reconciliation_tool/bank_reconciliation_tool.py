@@ -389,6 +389,139 @@ def create_payment_entry_bts(
 # APIs for new bank reconciliation tool (/banking)
 
 
+@frappe.whitelist(methods=["POST"])
+def auto_reconcile_by_reference_number(
+	bank_account: str,
+	from_date: str | date | None = None,
+	to_date: str | date | None = None,
+):
+	"""Auto reconcile Bank Transactions with Payment Entries purely based on an
+	exact match between the Bank Transaction's Reference Number and the
+	Payment Entry's Reference No (Cheque/Reference No).
+
+	Unlike `auto_reconcile_vouchers`, this does not consider amount, party or
+	date proximity for ranking - it only reconciles when there is a single,
+	unambiguous Payment Entry with the same reference number as the bank
+	transaction.
+	"""
+	bank_transactions = get_bank_transactions(bank_account, from_date, to_date)
+
+	reconciled, skipped, ambiguous = [], [], []
+
+	for transaction in bank_transactions:
+		if not transaction.reference_number:
+			skipped.append(transaction.name)
+			continue
+
+		matches = get_pe_matches_by_reference_number(transaction)
+
+		if not matches:
+			skipped.append(transaction.name)
+			continue
+
+		if len(matches) > 1:
+			# More than one Payment Entry shares this reference number, do not guess
+			ambiguous.append(transaction.name)
+			continue
+
+		payment_entry = matches[0]
+
+		vouchers = json.dumps(
+			[
+				{
+					"payment_doctype": "Payment Entry",
+					"payment_name": payment_entry.name,
+					"amount": payment_entry.paid_amount,
+				}
+			]
+		)
+
+		updated_transaction = reconcile_vouchers(transaction.name, vouchers)
+
+		if updated_transaction.status == "Reconciled":
+			reconciled.append(updated_transaction.name)
+		else:
+			# Partially allocated (e.g. Payment Entry amount < transaction amount)
+			skipped.append(updated_transaction.name)
+
+	message = get_auto_reconcile_by_reference_message(reconciled, ambiguous)
+
+	return {
+		"reconciled": reconciled,
+		"skipped": skipped,
+		"ambiguous": ambiguous,
+		"message": message,
+	}
+
+
+def get_pe_matches_by_reference_number(transaction):
+	"""Return submitted, unreconciled Payment Entries whose Reference No exactly
+	matches the given Bank Transaction's Reference Number, for the same bank
+	account/GL account."""
+	bank_account_details = frappe.db.get_values(
+		"Bank Account", transaction.bank_account, ["account"], as_dict=True
+	)
+	if not bank_account_details:
+		return []
+
+	gl_account = bank_account_details[0].account
+	account_from_to = "paid_to" if transaction.deposit > 0.0 else "paid_from"
+	payment_type = "Receive" if transaction.deposit > 0.0 else "Pay"
+
+	pe = frappe.qb.DocType("Payment Entry")
+
+	matches = (
+		frappe.qb.from_(pe)
+		.select(
+			pe.name,
+			pe.base_paid_amount_after_tax.as_("paid_amount"),
+			pe.reference_no,
+		)
+		.where(pe.docstatus == 1)
+		.where(pe.payment_type.isin([payment_type, "Internal Transfer"]))
+		.where(pe.clearance_date.isnull())
+		.where(getattr(pe, account_from_to) == gl_account)
+		.where(pe.reference_no == transaction.reference_number)
+		.run(as_dict=True)
+	)
+
+	# Exclude Payment Entries already fully allocated to some other Bank Transaction(s)
+	if not matches:
+		return matches
+
+	voucher_docs = [("Payment Entry", m.name) for m in matches]
+	allocated_amounts = get_total_allocated_amount(voucher_docs)
+
+	available_matches = []
+	for match in matches:
+		allocated = get_allocated_amount(allocated_amounts, {"doctype": "Payment Entry", "name": match.name}, gl_account)
+		if allocated:
+			match.paid_amount = flt(match.paid_amount) - flt(allocated)
+
+		if match.paid_amount > 0:
+			available_matches.append(match)
+
+	return available_matches
+
+
+def get_auto_reconcile_by_reference_message(reconciled, ambiguous):
+	"""Returns alert message for reference number based auto reconciliation."""
+	if not reconciled and not ambiguous:
+		return _("No matches occurred via auto reconciliation")
+
+	message = ""
+	if reconciled:
+		message += _("{0} Transaction(s) Reconciled").format(len(reconciled))
+
+	if ambiguous:
+		message += "<br>" if message else ""
+		message += _("{0} {1} skipped due to multiple matching reference numbers").format(
+			len(ambiguous), _("transactions") if len(ambiguous) > 1 else _("transaction")
+		)
+
+	return message
+
+
 @frappe.whitelist(methods=["GET"])
 def get_older_unreconciled_transactions(bank_account: str, from_date: str | date):
 	"""
