@@ -280,6 +280,71 @@ export const useReconcileTransaction = () => {
 
 }
 
+interface AutoReconcileByReferenceResult {
+    reconciled: string[]
+    skipped: string[]
+    ambiguous: string[]
+    message: string
+}
+
+/**
+ * Auto reconcile Bank Transactions purely by matching the Bank Transaction's
+ * Reference Number against the Payment Entry's Reference No (Cheque/Reference No).
+ * Only reconciles when there is exactly one unambiguous Payment Entry match.
+ */
+export const useAutoReconcileByReferenceNumber = () => {
+
+    const selectedBank = useAtomValue(selectedBankAccountAtom)
+    const dates = useAtomValue(bankRecDateAtom)
+    const setSelectedTransaction = useSetAtom(bankRecSelectedTransactionAtom(selectedBank?.name || ''))
+
+    const { call, loading } = useFrappePostCall<{ message: AutoReconcileByReferenceResult }>('erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.auto_reconcile_by_reference_number')
+
+    const { mutate } = useSWRConfig()
+
+    const autoReconcile = () => {
+        if (!selectedBank) {
+            return
+        }
+
+        call({
+            bank_account: selectedBank.name,
+            from_date: dates.fromDate,
+            to_date: dates.toDate,
+        }).then((res) => {
+            const { reconciled, message } = res.message
+
+            // Refresh the unreconciled transactions list and balance after bulk auto reconciliation
+            mutate(`bank-reconciliation-unreconciled-transactions-${selectedBank.name}-${dates.fromDate}-${dates.toDate}`)
+            mutate(`bank-reconciliation-account-closing-balance-${selectedBank.name}-${dates.toDate}`)
+
+            if (reconciled.length > 0) {
+                setSelectedTransaction([])
+                toast.success(_("Auto Reconciliation"), {
+                    duration: 5000,
+                    closeButton: true,
+                    description: message
+                })
+            } else {
+                toast.info(_("Auto Reconciliation"), {
+                    duration: 5000,
+                    closeButton: true,
+                    description: message
+                })
+            }
+        }).catch((error) => {
+            console.error(error)
+            toast.error(_("Error"), {
+                duration: 5000,
+                description: getErrorMessage(error)
+            })
+        })
+    }
+
+    return { autoReconcile, loading }
+
+}
+
 interface BankAccountWithCurrency extends Pick<BankAccount, 'name' | 'bank' | 'account_name' | 'is_credit_card' | 'company' | 'account' | 'account_type' | 'account_subtype' | 'bank_account_no' | 'last_integration_date'> {
     account_currency?: string
 }
