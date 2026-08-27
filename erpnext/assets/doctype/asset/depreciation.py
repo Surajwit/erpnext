@@ -195,14 +195,38 @@ def _make_depreciation_entry(
 	depr_schedule_doc = frappe.get_doc("Asset Depreciation Schedule", depr_schedule_name)
 	asset = frappe.get_doc("Asset", depr_schedule_doc.asset)
 
-	credit_account, debit_account = get_credit_debit_accounts_for_asset(asset.asset_category, asset.company)
+	credit_account, debit_account = get_credit_debit_accounts_for_asset(
+		asset.asset_category, asset.company
+	)
 	depr_cost_center, depr_series = get_depreciation_cost_center_and_series(asset)
 	accounting_dimensions = accounting_dimensions or get_checks_for_pl_and_bs_accounts()
 	depr_posting_error = None
 
-	for d in depr_schedule_doc.get("depreciation_schedule")[
-		(sch_start_idx or 0) : (sch_end_idx or len(depr_schedule_doc.get("depreciation_schedule")))
-	]:
+	depreciation_schedule = depr_schedule_doc.get("depreciation_schedule") or []
+
+	# When an explicit schedule range is provided, process only that range.
+	# The "Make Depreciation Entry" button passes the selected row as:
+	#
+	# sch_start_idx = row.idx - 1
+	# sch_end_idx   = row.idx
+	#
+	# This ensures that only the selected depreciation schedule row
+	# is processed.
+	if sch_start_idx is not None and sch_end_idx is not None:
+		start_idx = cint(sch_start_idx)
+		end_idx = cint(sch_end_idx)
+
+		if start_idx < 0 or end_idx <= start_idx or end_idx > len(depreciation_schedule):
+			frappe.throw(_("Invalid depreciation schedule row range."))
+
+		schedule_rows = depreciation_schedule[start_idx:end_idx]
+	else:
+		# No explicit range was supplied.
+		# Keep the existing behavior for automatic depreciation posting
+		# and other internal calls.
+		schedule_rows = depreciation_schedule
+
+	for d in schedule_rows:
 		frappe.db.savepoint("depr_entry")
 		try:
 			_make_journal_entry_for_depreciation(
@@ -246,16 +270,33 @@ def _make_journal_entry_for_depreciation(
 	debit_account,
 	accounting_dimensions,
 ):
-	if not (sch_start_idx and sch_end_idx) and not (
-		not depr_schedule.journal_entry and getdate(depr_schedule.schedule_date) <= getdate(date)
-	):
-		return
+	# If an explicit schedule range was supplied, process only the
+	# selected schedule row/range. Do not use the date to process
+	# previous depreciation rows.
+	if sch_start_idx is not None and sch_end_idx is not None:
+		if depr_schedule.journal_entry:
+			return
+
+	else:
+		# No explicit schedule range was supplied.
+		# Retain the existing date-based behavior for automatic
+		# depreciation posting and other internal calls.
+		if depr_schedule.journal_entry:
+			return
+
+		if getdate(depr_schedule.schedule_date) > getdate(date):
+			return
 
 	je = frappe.new_doc("Journal Entry")
 	setup_journal_entry_metadata(je, depr_schedule_doc, depr_series, depr_schedule, asset)
 
 	credit_entry, debit_entry = get_credit_and_debit_entry(
-		credit_account, depr_schedule, asset, depr_cost_center, debit_account, accounting_dimensions
+		credit_account,
+		depr_schedule,
+		asset,
+		depr_cost_center,
+		debit_account,
+		accounting_dimensions,
 	)
 
 	je.append("accounts", credit_entry)
@@ -482,7 +523,7 @@ def restore_asset(asset_name: str):
 
 def get_note_for_restore(asset):
 	return _("This schedule was created when Asset {0} was restored.").format(
-		get_link_to_form(asset.doctype, asset.name)
+		get_link_to_form("Asset", asset.name)
 	)
 
 
@@ -579,7 +620,7 @@ def create_reverse_depreciation_entry(asset_name, journal_entry):
 		return reverse_journal_entry
 	else:
 		frappe.throw(
-			_("Please disable workflow temporarily for Journal Entry {0}").format(reverse_journal_entry.name)
+			_("Please disable workflow temporarily for Journal Entry {0}").format(journal_entry.name)
 		)
 
 
@@ -858,4 +899,4 @@ def validate_disposal_date(reference_date, disposal_date, label):
 			_("Disposal date {0} cannot be before {1} date {2} of the asset.").format(
 				disposal_date, label, reference_date
 			)
-		)
+	)
