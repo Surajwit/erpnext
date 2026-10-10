@@ -25,7 +25,6 @@
   "account_type",
   "tax_rate",
   "freeze_account",
-  "freeze_account_till_date",
   "balance_must_be",
   "lft",
   "rgt",
@@ -146,11 +145,6 @@
    "oldfieldname": "freeze_account",
    "oldfieldtype": "Select",
    "options": "No\nYes"
-  },
-  {
-  "fieldname": "freeze_account_till_date",
-  "fieldtype": "Date",
-  "label": "Frozen Till"
   },
   {
    "fieldname": "balance_must_be",
