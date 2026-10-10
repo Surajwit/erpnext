@@ -7,7 +7,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.model.meta import get_field_precision
 from frappe.model.naming import set_name_from_naming_options
-from frappe.utils import create_batch, flt, fmt_money, now
+from frappe.utils import create_batch, flt, fmt_money, getdate, now
 
 import erpnext
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
@@ -100,7 +100,7 @@ class GLEntry(Document):
 			self.validate_account_details(adv_adj)
 			self.validate_dimensions_for_pl_and_bs()
 			validate_balance_type(self.account, adv_adj)
-			validate_frozen_account(self.company, self.account, adv_adj)
+			validate_frozen_account(self.company, self.account, self.posting_date, adv_adj)
 
 			if (
 				self.voucher_type == "Journal Entry"
@@ -417,15 +417,32 @@ def update_outstanding_amt(
 		ref_doc.set_status(update=True)
 
 
-def validate_frozen_account(company, account, adv_adj=None):
+def validate_frozen_account(company, account, posting_date, adv_adj=None):
 	frozen_account = frappe.get_cached_value("Account", account, "freeze_account")
 	if frozen_account == "Yes" and not adv_adj:
+		freeze_account_till_date = frappe.get_cached_value(
+			"Account", account, "freeze_account_till_date"
+		)
+		if freeze_account_till_date and getdate(posting_date) > getdate(freeze_account_till_date):
+			return
+
 		role_allowed_for_frozen_entries = frappe.get_cached_value(
 			"Company", company, "role_allowed_for_frozen_entries"
 		)
 
 		if not role_allowed_for_frozen_entries:
 			frappe.throw(_("Account {0} is frozen").format(account))
+		elif frappe.session.user == "Administrator":
+			if not frappe.db.exists(
+				"Has Role",
+				{
+					"parent": "Administrator",
+					"parenttype": "User",
+					"parentfield": "roles",
+					"role": role_allowed_for_frozen_entries,
+				},
+			):
+				frappe.throw(_("Not authorized to edit frozen Account {0}").format(account))
 		elif role_allowed_for_frozen_entries not in frappe.get_roles():
 			frappe.throw(_("Not authorized to edit frozen Account {0}").format(account))
 

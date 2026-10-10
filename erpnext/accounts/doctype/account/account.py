@@ -333,7 +333,10 @@ class Account(NestedSet):
 
 	def validate_frozen_accounts_modifier(self):
 		doc_before_save = self.get_doc_before_save()
-		if not doc_before_save or doc_before_save.freeze_account == self.freeze_account:
+		if not doc_before_save or (
+			doc_before_save.freeze_account == self.freeze_account
+			and doc_before_save.freeze_account_till_date == self.freeze_account_till_date
+		):
 			return
 
 		role_allowed_for_frozen_entries = frappe.get_cached_value(
